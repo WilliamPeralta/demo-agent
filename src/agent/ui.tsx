@@ -1,4 +1,5 @@
 import { useStreamContext } from "@langchain/langgraph-sdk/react-ui";
+import { useEffect } from "react";
 
 /**
  * Markdown Artifact Component
@@ -8,15 +9,19 @@ function MarkdownArtifactComponent(props: { content: string; title: string }) {
   const stream = useStreamContext();
   const artifactTuple = (stream as any).meta?.artifact;
 
-  if (artifactTuple && Array.isArray(artifactTuple) && artifactTuple.length >= 2) {
-    const [Artifact, bag] = artifactTuple;
-    const { open, setOpen } = bag || {};
+  const [Artifact, bag] = artifactTuple && Array.isArray(artifactTuple) && artifactTuple.length >= 2
+    ? artifactTuple
+    : [null, null];
+  const { open, setOpen } = bag || {};
 
-    // Auto-open the artifact panel
+  // Auto-open the artifact panel (only once, on mount)
+  useEffect(() => {
     if (setOpen && !open) {
       setOpen(true);
     }
+  }, [setOpen]); // Only run when setOpen changes (i.e., on mount)
 
+  if (Artifact) {
     return (
       <>
         <div

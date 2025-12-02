@@ -113,6 +113,7 @@ ISTRUZIONI:
    - replace_text: per sostituire parti specifiche del testo
 3. Dopo ogni modifica, conferma cosa hai fatto.
 4. Rispondi sempre in italiano.
+5. IMPORTANTE: Usa i tool UNA SOLA VOLTA per richiesta. Non chiamare tool multipli in sequenza.
 """
 
 
@@ -181,10 +182,13 @@ async def apply_edits(state: State) -> dict[str, Any]:
 
 
 def should_continue(state: State) -> str:
-    """Route to tools or end based on last message."""
-    last = state["messages"][-1] if state["messages"] else None
-    if last and hasattr(last, "tool_calls") and last.tool_calls:
-        return "tools"
+    """Route to tools or end based on last AI message."""
+    # Find the last AI message (not ToolMessage)
+    for msg in reversed(state["messages"]):
+        if isinstance(msg, AIMessage):
+            if msg.tool_calls:
+                return "tools"
+            return END
     return END
 
 
@@ -207,7 +211,10 @@ def build_graph():
     graph.add_edge("tools", "apply_edits")
     graph.add_edge("apply_edits", "agent")
 
-    return graph.compile(name="Markdown Editor Agent")
+    # Recursion limit to prevent infinite loops
+    return graph.compile(name="Markdown Editor Agent").with_config(
+        recursion_limit=10
+    )
 
 
 graph = build_graph()
