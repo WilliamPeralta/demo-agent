@@ -7,6 +7,9 @@
   "ui": {
     "agent": "./src/agent/ui.tsx"
   },
+  "node_dependencies": {
+    "react-markdown": "^9"
+  },
   "env": ".env",
   "image_distro": "wolfi"
 }

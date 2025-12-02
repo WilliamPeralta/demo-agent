@@ -1,5 +1,6 @@
 import { useStreamContext } from "@langchain/langgraph-sdk/react-ui";
 import { useEffect } from "react";
+import ReactMarkdown from "react-markdown";
 
 /**
  * Markdown Artifact Component
@@ -9,9 +10,10 @@ function MarkdownArtifactComponent(props: { content: string; title: string }) {
   const stream = useStreamContext();
   const artifactTuple = (stream as any).meta?.artifact;
 
-  const [Artifact, bag] = artifactTuple && Array.isArray(artifactTuple) && artifactTuple.length >= 2
-    ? artifactTuple
-    : [null, null];
+  const [Artifact, bag] =
+    artifactTuple && Array.isArray(artifactTuple) && artifactTuple.length >= 2
+      ? artifactTuple
+      : [null, null];
   const { open, setOpen } = bag || {};
 
   // Auto-open the artifact panel (only once, on mount)
@@ -19,7 +21,7 @@ function MarkdownArtifactComponent(props: { content: string; title: string }) {
     if (setOpen && !open) {
       setOpen(true);
     }
-  }, [setOpen]); // Only run when setOpen changes (i.e., on mount)
+  }, [setOpen]);
 
   if (Artifact) {
     return (
@@ -43,7 +45,9 @@ function MarkdownArtifactComponent(props: { content: string; title: string }) {
             <p style={{ fontWeight: 500, margin: 0, color: "#1f2937" }}>
               {props.title}
             </p>
-            <p style={{ fontSize: "12px", margin: "2px 0 0 0", color: "#6b7280" }}>
+            <p
+              style={{ fontSize: "12px", margin: "2px 0 0 0", color: "#6b7280" }}
+            >
               {open ? "Click to close" : "Click to open"}
             </p>
           </div>
@@ -59,8 +63,17 @@ function MarkdownArtifactComponent(props: { content: string; title: string }) {
         </div>
 
         <Artifact title={props.title}>
-          <div style={{ padding: "20px", height: "100%", overflow: "auto" }}>
-            <SimpleMarkdown content={props.content} />
+          <div
+            style={{
+              padding: "24px",
+              height: "100%",
+              overflow: "auto",
+              boxSizing: "border-box",
+            }}
+          >
+            <div className="prose prose-sm max-w-none">
+              <ReactMarkdown>{props.content}</ReactMarkdown>
+            </div>
           </div>
         </Artifact>
       </>
@@ -96,81 +109,10 @@ function MarkdownArtifactComponent(props: { content: string; title: string }) {
           border: "1px solid #e5e7eb",
         }}
       >
-        <SimpleMarkdown content={props.content} />
+        <div className="prose prose-sm max-w-none">
+          <ReactMarkdown>{props.content}</ReactMarkdown>
+        </div>
       </div>
-    </div>
-  );
-}
-
-/**
- * Simple markdown renderer
- */
-function SimpleMarkdown({ content }: { content: string }) {
-  const lines = content.split("\n");
-
-  return (
-    <div style={{ fontFamily: "system-ui, sans-serif", lineHeight: 1.6 }}>
-      {lines.map((line, i) => {
-        if (line.startsWith("# ")) {
-          return (
-            <h1
-              key={i}
-              style={{
-                fontSize: "24px",
-                fontWeight: "bold",
-                margin: "20px 0 12px 0",
-                borderBottom: "1px solid #e5e7eb",
-                paddingBottom: "8px",
-              }}
-            >
-              {line.slice(2)}
-            </h1>
-          );
-        }
-        if (line.startsWith("## ")) {
-          return (
-            <h2
-              key={i}
-              style={{
-                fontSize: "20px",
-                fontWeight: 600,
-                margin: "16px 0 8px 0",
-              }}
-            >
-              {line.slice(3)}
-            </h2>
-          );
-        }
-        if (line.startsWith("### ")) {
-          return (
-            <h3
-              key={i}
-              style={{
-                fontSize: "16px",
-                fontWeight: 500,
-                margin: "12px 0 6px 0",
-              }}
-            >
-              {line.slice(4)}
-            </h3>
-          );
-        }
-        if (line.startsWith("- ") || line.startsWith("* ")) {
-          return (
-            <li key={i} style={{ marginLeft: "20px", marginBottom: "4px" }}>
-              {line.slice(2)}
-            </li>
-          );
-        }
-        if (line.trim() === "") {
-          return <br key={i} />;
-        }
-        return (
-          <p key={i} style={{ margin: "8px 0" }}>
-            {line}
-          </p>
-        );
-      })}
     </div>
   );
 }
