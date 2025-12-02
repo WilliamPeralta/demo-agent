@@ -2,30 +2,37 @@
 
 An agent that can interact via chat and edit a markdown document artifact.
 The artifact is stored in the graph state and can be modified through tools.
+Uses Generative UI to render the artifact in a side panel.
 """
 
 from __future__ import annotations
 
-from typing import Annotated, Any
+import uuid
+from typing import Annotated, Any, Sequence
 
-from langchain_core.messages import AnyMessage, SystemMessage, HumanMessage, AIMessage
+from langchain_core.messages import AIMessage, AnyMessage, SystemMessage
 from langchain_core.tools import tool
 from langchain_openai import ChatOpenAI
-from langgraph.graph import StateGraph, START, END
+from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
+from langgraph.graph.ui import AnyUIMessage, push_ui_message, ui_message_reducer
 from langgraph.prebuilt import ToolNode
 from typing_extensions import TypedDict
 
 
-class State(TypedDict):
-    """Agent state with messages and markdown artifact."""
+# =============================================================================
+# State
+# =============================================================================
 
-    messages: Annotated[list[AnyMessage], add_messages]
+class State(TypedDict):
+    """Agent state with messages, artifact, and UI components."""
+    messages: Annotated[Sequence[AnyMessage], add_messages]
+    ui: Annotated[Sequence[AnyUIMessage], ui_message_reducer]
     artifact: str
 
 
-# Default initial markdown content
-DEFAULT_MARKDOWN = """# Documento
+DEFAULT_ARTIFACT = """\
+# Documento
 
 Benvenuto! Questo e' il tuo documento markdown.
 
@@ -41,6 +48,10 @@ Inizia a chattare per modificare questo documento!
 """
 
 
+# =============================================================================
+# Tools
+# =============================================================================
+
 @tool
 def update_document(new_content: str) -> str:
     """Replace the entire markdown document with new content.
@@ -49,11 +60,8 @@ def update_document(new_content: str) -> str:
 
     Args:
         new_content: The complete new markdown content for the document.
-
-    Returns:
-        Confirmation message.
     """
-    return f"Document updated successfully."
+    return "Document updated successfully."
 
 
 @tool
@@ -64,11 +72,8 @@ def append_to_document(content_to_add: str) -> str:
 
     Args:
         content_to_add: The markdown content to append at the end.
-
-    Returns:
-        Confirmation message.
     """
-    return f"Content appended successfully."
+    return "Content appended successfully."
 
 
 @tool
@@ -80,22 +85,19 @@ def replace_text(old_text: str, new_text: str) -> str:
     Args:
         old_text: The exact text to find and replace.
         new_text: The new text to replace it with.
-
-    Returns:
-        Confirmation message.
     """
-    return f"Text replaced successfully."
+    return "Text replaced successfully."
 
 
-tools = [update_document, append_to_document, replace_text]
+TOOLS = [update_document, append_to_document, replace_text]
 
 
-def get_model():
-    """Get the configured OpenAI model."""
-    return ChatOpenAI(model="gpt-4o-mini", temperature=0.7)
+# =============================================================================
+# Model & Prompt
+# =============================================================================
 
-
-SYSTEM_PROMPT = """Sei un assistente che aiuta gli utenti a modificare un documento markdown.
+SYSTEM_PROMPT = """\
+Sei un assistente che aiuta gli utenti a modificare un documento markdown.
 Hai accesso a strumenti per modificare il documento.
 
 DOCUMENTO ATTUALE:
@@ -114,80 +116,98 @@ ISTRUZIONI:
 """
 
 
-async def agent_node(state: State) -> dict[str, Any]:
-    """Process the user message and potentially modify the document."""
-    model = get_model()
-    model_with_tools = model.bind_tools(tools)
-
-    artifact = state.get("artifact") or DEFAULT_MARKDOWN
-    system_message = SystemMessage(content=SYSTEM_PROMPT.format(artifact=artifact))
-
-    messages = [system_message] + list(state["messages"])
-    response = await model_with_tools.ainvoke(messages)
-
-    return {"messages": [response]}
+def get_model():
+    """Get the configured LLM with tools bound."""
+    return ChatOpenAI(model="gpt-4o-mini", temperature=0.7).bind_tools(TOOLS)
 
 
-async def process_tool_result(state: State) -> dict[str, Any]:
-    """Process tool results and update artifact based on tool calls."""
-    messages = state["messages"]
-    artifact = state.get("artifact") or DEFAULT_MARKDOWN
+# =============================================================================
+# Nodes
+# =============================================================================
 
-    # Look for recent tool calls and apply changes
-    for msg in messages[-10:]:
-        if hasattr(msg, "tool_calls") and msg.tool_calls:
-            for tool_call in msg.tool_calls:
-                name = tool_call.get("name", "")
-                args = tool_call.get("args", {})
+async def agent(state: State) -> dict[str, Any]:
+    """Process user message and generate response."""
+    artifact = state.get("artifact") or DEFAULT_ARTIFACT
 
-                if name == "update_document":
-                    new_content = args.get("new_content", "")
-                    if new_content:
-                        artifact = new_content
-                elif name == "append_to_document":
-                    content = args.get("content_to_add", "")
-                    if content:
-                        artifact = artifact.rstrip() + "\n\n" + content
-                elif name == "replace_text":
-                    old_text = args.get("old_text", "")
-                    new_text = args.get("new_text", "")
-                    if old_text and old_text in artifact:
-                        artifact = artifact.replace(old_text, new_text)
+    messages = [
+        SystemMessage(content=SYSTEM_PROMPT.format(artifact=artifact)),
+        *state["messages"],
+    ]
+
+    response = await get_model().ainvoke(messages)
+
+    # Create message with explicit ID for UI association
+    ai_message = AIMessage(
+        id=str(uuid.uuid4()),
+        content=response.content,
+        tool_calls=response.tool_calls or [],
+    )
+
+    # Emit UI only on final response (no tool calls)
+    if not ai_message.tool_calls:
+        push_ui_message(
+            "markdown_artifact",
+            {"content": artifact, "title": "Documento Markdown"},
+            message=ai_message,
+        )
+
+    return {"messages": [ai_message]}
+
+
+async def apply_edits(state: State) -> dict[str, Any]:
+    """Apply tool call edits to the artifact."""
+    artifact = state.get("artifact") or DEFAULT_ARTIFACT
+
+    # Find the most recent AI message with tool calls
+    for msg in reversed(state["messages"]):
+        if not isinstance(msg, AIMessage) or not msg.tool_calls:
+            continue
+
+        for call in msg.tool_calls:
+            name = call.get("name", "")
+            args = call.get("args", {})
+
+            if name == "update_document" and args.get("new_content"):
+                artifact = args["new_content"]
+            elif name == "append_to_document" and args.get("content_to_add"):
+                artifact = f"{artifact.rstrip()}\n\n{args['content_to_add']}"
+            elif name == "replace_text":
+                old, new = args.get("old_text", ""), args.get("new_text", "")
+                if old and old in artifact:
+                    artifact = artifact.replace(old, new)
+        break  # Only process the most recent message
 
     return {"artifact": artifact}
 
 
 def should_continue(state: State) -> str:
-    """Determine if we should continue to tools or end."""
-    messages = state["messages"]
-    if not messages:
-        return END
-
-    last_message = messages[-1]
-
-    if hasattr(last_message, "tool_calls") and last_message.tool_calls:
+    """Route to tools or end based on last message."""
+    last = state["messages"][-1] if state["messages"] else None
+    if last and hasattr(last, "tool_calls") and last.tool_calls:
         return "tools"
     return END
 
 
-# Build the graph
+# =============================================================================
+# Graph
+# =============================================================================
+
 def build_graph():
     """Build and compile the agent graph."""
-    builder = StateGraph(State)
+    graph = StateGraph(State)
 
-    # Add nodes
-    builder.add_node("agent", agent_node)
-    builder.add_node("tools", ToolNode(tools))
-    builder.add_node("process_result", process_tool_result)
+    # Nodes
+    graph.add_node("agent", agent)
+    graph.add_node("tools", ToolNode(TOOLS))
+    graph.add_node("apply_edits", apply_edits)
 
-    # Add edges
-    builder.add_edge(START, "agent")
-    builder.add_conditional_edges("agent", should_continue, ["tools", END])
-    builder.add_edge("tools", "process_result")
-    builder.add_edge("process_result", "agent")
+    # Edges
+    graph.add_edge(START, "agent")
+    graph.add_conditional_edges("agent", should_continue, ["tools", END])
+    graph.add_edge("tools", "apply_edits")
+    graph.add_edge("apply_edits", "agent")
 
-    # Compile without checkpointer - LangGraph API handles persistence automatically
-    return builder.compile(name="Markdown Editor Agent")
+    return graph.compile(name="Markdown Editor Agent")
 
 
 graph = build_graph()
